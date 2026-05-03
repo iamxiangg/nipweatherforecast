@@ -15,27 +15,43 @@ TOWNS = {
 
 def get_data():
     try:
-        # 1. Forecast
-        res_f = requests.get("https://api-open.data.gov.sg/v2/real-time/api/two-hr-forecast", timeout=10).json()
-        item_f = res_f['data']['items'][0]
-        update_time = item_f['update_timestamp'].split('T')[1][:5]
-        forecast_list = {f['area']: f['forecast'] for f in item_f['forecasts']}
+        # 1. Fetch Forecast
+        res_f = requests.get("https://api-open.data.gov.sg/v2/real-time/api/two-hr-forecast", timeout=15).json()
+        
+        # SAFE CHECK: Ensure data and items exist
+        items_f = res_f.get('data', {}).get('items', [])
+        if not items_f:
+            print("Fetch Error: No forecast items found in API response.")
+            return None, None, None
+            
+        item_f = items_f[0]
+        update_time = item_f.get('update_timestamp', '00:00T00:00').split('T')[1][:5]
+        forecast_list = {f['area']: f['forecast'] for f in item_f.get('forecasts', [])}
 
-        # 2. Rainfall
-        res_r = requests.get("https://api-open.data.gov.sg/v2/real-time/api/rainfall", timeout=10).json()
-        rainfall_list = {r['station_id']: r['value'] for r in res_r['data']['items'][0]['readings']}
+        # 2. Fetch Rainfall
+        res_r = requests.get("https://api-open.data.gov.sg/v2/real-time/api/rainfall", timeout=15).json()
+        items_r = res_r.get('data', {}).get('items', [])
+        
+        if not items_r:
+            print("Fetch Error: No rainfall items found in API response.")
+            return None, None, None
+            
+        rainfall_list = {r['station_id']: r['value'] for r in items_r[0].get('readings', [])}
 
         return forecast_list, rainfall_list, update_time
     except Exception as e:
-        print(f"Fetch Error: {e}")
+        print(f"Fetch Error: {str(e)}")
         return None, None, None
 
 def main():
     forecasts, rain_sensors, timing = get_data()
-    if not forecasts:
-        sys.exit(0)
+    
+    # If API fails, exit quietly without triggering a 'CHANGE_DETECTED'
+    if forecasts is None:
+        print("CHANGE_DETECTED=false")
+        return
 
-    current_expect_id = "|".join([f"{t}:{forecasts.get(t)}" for t in TOWNS])
+    current_expect_id = "|".join([f"{t}:{forecasts.get(t, 'N/A')}" for t in TOWNS])
 
     last_expect_id = ""
     if os.path.exists(DB_FILE):
@@ -43,7 +59,6 @@ def main():
             last_expect_id = f.read().strip()
 
     if current_expect_id != last_expect_id:
-        # Build and Send Telegram Message
         msg = f"📊 *Weather Change Alert* ({timing})\n"
         msg += "------------------------------------\n\n"
         for town, ids in TOWNS.items():
@@ -57,11 +72,10 @@ def main():
             requests.post(f"https://api.telegram.org/bot{TOKEN}/sendMessage", 
                           json={"chat_id": cid.strip(), "text": msg, "parse_mode": "Markdown"})
         
-        # Save memory
         with open(DB_FILE, "w") as f:
             f.write(current_expect_id)
         
-        print("CHANGE_DETECTED=true") # Signal for GitHub Action
+        print("CHANGE_DETECTED=true")
     else:
         print("CHANGE_DETECTED=false")
 
