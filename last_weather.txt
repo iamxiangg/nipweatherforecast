@@ -1,1 +1,1 @@
-Novena:Cloudy|Sembawang:Cloudy|Yishun:Showers
+Novena:Showers|Sembawang:Showers|Yishun:Showers
