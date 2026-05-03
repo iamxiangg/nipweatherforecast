@@ -1,39 +1,55 @@
 import requests
 import os
 
-# Get secrets from GitHub Actions environment
+# --- CONFIG ---
 TOKEN = os.getenv("TELEGRAM_TOKEN")
-CHAT_ID = os.getenv("CHAT_ID")
+# Enter multiple IDs separated by commas in GitHub Secrets, e.g., "110089567,987654321"
+CHAT_IDS = os.getenv("CHAT_IDS", "").split(",")
 TARGET_AREAS = ["Sembawang", "Yishun", "Novena"]
+DB_FILE = "last_weather.txt"
 
-def run_weather_bot():
-    # 1. Fetch 2-Hour Forecast
+def get_weather():
     url_2hr = "https://api-open.data.gov.sg/v2/real-time/api/two-hr-forecast"
-    res = requests.get(url_2hr).json()
-    forecasts = res['data']['items'][0]['forecasts']
-    
-    # 2. Extract specific areas
-    local_data = ""
-    for f in forecasts:
-        if f['area'] in TARGET_AREAS:
-            local_data += f"• {f['area']}: {f['forecast']}\n"
+    try:
+        res = requests.get(url_2hr).json()
+        forecasts = res['data']['items'][0]['forecasts']
+        # Filter and sort to ensure the comparison string is consistent
+        current = {f['area']: f['forecast'] for f in forecasts if f['area'] in TARGET_AREAS}
+        status_str = "|".join([f"{k}:{v}" for k, v in sorted(current.items())])
+        return current, status_str
+    except:
+        return None, None
 
-    # 3. Fetch 24-Hour General
-    url_24hr = "https://api-open.data.gov.sg/v2/real-time/api/twenty-four-hr-forecast"
-    gen_res = requests.get(url_24hr).json()
-    gen = gen_res['data']['items'][0]['general']
+def send_to_all(message):
+    for cid in CHAT_IDS:
+        if not cid.strip(): continue
+        url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+        requests.post(url, json={"chat_id": cid.strip(), "text": message, "parse_mode": "Markdown"})
 
-    # 4. Construct Message
-    message = (
-        f"🇸🇬 *Weather Update*\n\n"
-        f"📍 *Local (2-Hr):*\n{local_data}\n"
-        f"📅 *General (24-Hr):*\n{gen['forecast']}\n"
-        f"🌡 {gen['temperature']['low']}°C - {gen['temperature']['high']}°C"
-    )
+def main():
+    current_data, status_string = get_weather()
+    if not current_data: return
 
-    # 5. Push to Telegram
-    tel_url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-    requests.post(tel_url, json={"chat_id": CHAT_ID, "text": message, "parse_mode": "Markdown"})
+    # Check for state change
+    last_status = ""
+    if os.path.exists(DB_FILE):
+        with open(DB_FILE, "r") as f:
+            last_status = f.read().strip()
+
+    if status_string != last_status:
+        # Construct message
+        msg = "⚠️ *Weather Update (Change Detected)*\n\n"
+        for area, forecast in current_data.items():
+            msg += f"• {area}: {forecast}\n"
+        
+        send_to_all(msg)
+        
+        # Update the memory file
+        with open(DB_FILE, "w") as f:
+            f.write(status_string)
+        print("Change detected. Pushed to all chats.")
+    else:
+        print("No change. Silent.")
 
 if __name__ == "__main__":
-    run_weather_bot()
+    main()
