@@ -1,55 +1,69 @@
 import requests
 import os
+import sys
 
 # --- CONFIG ---
 TOKEN = os.getenv("TELEGRAM_TOKEN")
-# Enter multiple IDs separated by commas in GitHub Secrets, e.g., "110089567,987654321"
 CHAT_IDS = os.getenv("CHAT_IDS", "").split(",")
-TARGET_AREAS = ["Sembawang", "Yishun", "Novena"]
 DB_FILE = "last_weather.txt"
 
-def get_weather():
-    url_2hr = "https://api-open.data.gov.sg/v2/real-time/api/two-hr-forecast"
-    try:
-        res = requests.get(url_2hr).json()
-        forecasts = res['data']['items'][0]['forecasts']
-        # Filter and sort to ensure the comparison string is consistent
-        current = {f['area']: f['forecast'] for f in forecasts if f['area'] in TARGET_AREAS}
-        status_str = "|".join([f"{k}:{v}" for k, v in sorted(current.items())])
-        return current, status_str
-    except:
-        return None, None
+TOWNS = {
+    "Sembawang": {"station": "S104"},
+    "Yishun": {"station": "S122"},
+    "Novena": {"station": "S111"}
+}
 
-def send_to_all(message):
-    for cid in CHAT_IDS:
-        if not cid.strip(): continue
-        url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-        requests.post(url, json={"chat_id": cid.strip(), "text": message, "parse_mode": "Markdown"})
+def get_data():
+    try:
+        # 1. Forecast
+        res_f = requests.get("https://api-open.data.gov.sg/v2/real-time/api/two-hr-forecast", timeout=10).json()
+        item_f = res_f['data']['items'][0]
+        update_time = item_f['update_timestamp'].split('T')[1][:5]
+        forecast_list = {f['area']: f['forecast'] for f in item_f['forecasts']}
+
+        # 2. Rainfall
+        res_r = requests.get("https://api-open.data.gov.sg/v2/real-time/api/rainfall", timeout=10).json()
+        rainfall_list = {r['station_id']: r['value'] for r in res_r['data']['items'][0]['readings']}
+
+        return forecast_list, rainfall_list, update_time
+    except Exception as e:
+        print(f"Fetch Error: {e}")
+        return None, None, None
 
 def main():
-    current_data, status_string = get_weather()
-    if not current_data: return
+    forecasts, rain_sensors, timing = get_data()
+    if not forecasts:
+        sys.exit(0)
 
-    # Check for state change
-    last_status = ""
+    current_expect_id = "|".join([f"{t}:{forecasts.get(t)}" for t in TOWNS])
+
+    last_expect_id = ""
     if os.path.exists(DB_FILE):
         with open(DB_FILE, "r") as f:
-            last_status = f.read().strip()
+            last_expect_id = f.read().strip()
 
-    if status_string != last_status:
-        # Construct message
-        msg = "⚠️ *Weather Update (Change Detected)*\n\n"
-        for area, forecast in current_data.items():
-            msg += f"• {area}: {forecast}\n"
+    if current_expect_id != last_expect_id:
+        # Build and Send Telegram Message
+        msg = f"📊 *Weather Change Alert* ({timing})\n"
+        msg += "------------------------------------\n\n"
+        for town, ids in TOWNS.items():
+            expect = forecasts.get(town, "No Data")
+            val = rain_sensors.get(ids['station'], 0.0)
+            status = "☔ Raining" if val > 0 else "☁️ Dry"
+            msg += f"🏠 *{town.upper()}*\n└ *Current:* {status} ({val}mm)\n└ *Expect:* {expect}\n\n"
+
+        for cid in CHAT_IDS:
+            if not cid.strip(): continue
+            requests.post(f"https://api.telegram.org/bot{TOKEN}/sendMessage", 
+                          json={"chat_id": cid.strip(), "text": msg, "parse_mode": "Markdown"})
         
-        send_to_all(msg)
-        
-        # Update the memory file
+        # Save memory
         with open(DB_FILE, "w") as f:
-            f.write(status_string)
-        print("Change detected. Pushed to all chats.")
+            f.write(current_expect_id)
+        
+        print("CHANGE_DETECTED=true") # Signal for GitHub Action
     else:
-        print("No change. Silent.")
+        print("CHANGE_DETECTED=false")
 
 if __name__ == "__main__":
     main()
