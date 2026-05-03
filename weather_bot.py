@@ -13,44 +13,53 @@ TOWNS = {
     "Novena": {"station": "S111"}
 }
 
+def send_telegram(text):
+    for cid in CHAT_IDS:
+        cid = cid.strip()
+        if not cid: continue
+        url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+        requests.post(url, json={"chat_id": cid, "text": text, "parse_mode": "Markdown"})
+
 def get_data():
     try:
         # 1. Fetch Forecast
-        res_f = requests.get("https://api-open.data.gov.sg/v2/real-time/api/two-hr-forecast", timeout=15).json()
+        rf = requests.get("https://api-open.data.gov.sg/v2/real-time/api/two-hr-forecast", timeout=15)
+        if rf.status_code != 200: raise Exception(f"Forecast API Status {rf.status_code}")
         
-        # SAFE CHECK: Ensure data and items exist
-        items_f = res_f.get('data', {}).get('items', [])
-        if not items_f:
-            print("Fetch Error: No forecast items found in API response.")
-            return None, None, None
+        items_f = rf.json().get('data', {}).get('items', [])
+        if not items_f: return None, None, None # No data case
             
         item_f = items_f[0]
-        update_time = item_f.get('update_timestamp', '00:00T00:00').split('T')[1][:5]
+        update_time = item_f.get('update_timestamp', 'T00:00').split('T')[1][:5]
         forecast_list = {f['area']: f['forecast'] for f in item_f.get('forecasts', [])}
 
         # 2. Fetch Rainfall
-        res_r = requests.get("https://api-open.data.gov.sg/v2/real-time/api/rainfall", timeout=15).json()
-        items_r = res_r.get('data', {}).get('items', [])
+        rr = requests.get("https://api-open.data.gov.sg/v2/real-time/api/rainfall", timeout=15)
+        if rr.status_code != 200: raise Exception(f"Rainfall API Status {rr.status_code}")
         
-        if not items_r:
-            print("Fetch Error: No rainfall items found in API response.")
-            return None, None, None
-            
-        rainfall_list = {r['station_id']: r['value'] for r in items_r[0].get('readings', [])}
+        items_r = rr.json().get('data', {}).get('items', [])
+        rainfall_list = {r['station_id']: r['value'] for r in items_r[0].get('readings', [])} if items_r else {}
 
         return forecast_list, rainfall_list, update_time
     except Exception as e:
-        print(f"Fetch Error: {str(e)}")
-        return None, None, None
+        # Send system alert only once per failure period
+        send_telegram(f"⚠️ *System Alert:* Weather API is currently unreachable.\nError: `{str(e)}`")
+        return "ERROR", None, None
 
 def main():
     forecasts, rain_sensors, timing = get_data()
     
-    # If API fails, exit quietly without triggering a 'CHANGE_DETECTED'
-    if forecasts is None:
+    if forecasts == "ERROR":
+        print("CHANGE_DETECTED=false") # Don't update memory on error
+        return
+    
+    if not forecasts:
+        print("No new data available. Skipping.")
         print("CHANGE_DETECTED=false")
         return
 
+    # Create memory string: if a town is missing from API, we use 'N/A'
+    # This prevents the bot from thinking a missing town = a change.
     current_expect_id = "|".join([f"{t}:{forecasts.get(t, 'N/A')}" for t in TOWNS])
 
     last_expect_id = ""
@@ -59,22 +68,21 @@ def main():
             last_expect_id = f.read().strip()
 
     if current_expect_id != last_expect_id:
-        msg = f"📊 *Weather Change Alert* ({timing})\n"
+        msg = f"📊 *Weather Forecast Change* ({timing})\n"
         msg += "------------------------------------\n\n"
+        
         for town, ids in TOWNS.items():
-            expect = forecasts.get(town, "No Data")
+            expect = forecasts.get(town)
+            if not expect: continue # Skip towns missing from this specific API pull
+            
             val = rain_sensors.get(ids['station'], 0.0)
             status = "☔ Raining" if val > 0 else "☁️ Dry"
             msg += f"🏠 *{town.upper()}*\n└ *Current:* {status} ({val}mm)\n└ *Expect:* {expect}\n\n"
 
-        for cid in CHAT_IDS:
-            if not cid.strip(): continue
-            requests.post(f"https://api.telegram.org/bot{TOKEN}/sendMessage", 
-                          json={"chat_id": cid.strip(), "text": msg, "parse_mode": "Markdown"})
+        send_telegram(msg)
         
         with open(DB_FILE, "w") as f:
             f.write(current_expect_id)
-        
         print("CHANGE_DETECTED=true")
     else:
         print("CHANGE_DETECTED=false")
