@@ -1,14 +1,13 @@
-name: 15-Min Weather Watcher
+name: 30-Min Weather Watcher
 
 on:
   schedule:
-    - cron: '*/15 * * * *'
+    - cron: '*/30 * * * *'
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    # Required to allow GitHub to push the file change back to your repo
     permissions:
       contents: write
       
@@ -21,19 +20,29 @@ jobs:
         with:
           python-version: '3.9'
 
-      - name: Install dependencies
+      - name: Install Dependencies
         run: pip install requests
 
-      - name: Run bot
+      - name: Run Weather Check
+        id: check_weather
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           CHAT_IDS: ${{ secrets.CHAT_IDS }}
-        run: python weather_bot.py
-
-      - name: Commit and push if weather changed
         run: |
-          git config --global user.name "Weather-Bot-Action"
+          # Capture the output of the script to see if a change was detected
+          OUTPUT=$(python weather_bot.py)
+          echo "$OUTPUT"
+          if [[ "$OUTPUT" == *"CHANGE_DETECTED=true"* ]]; then
+            echo "changed=true" >> $GITHUB_OUTPUT
+          else
+            echo "changed=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Commit Memory State
+        if: steps.check_weather.outputs.changed == 'true'
+        run: |
+          git config --global user.name "GitHub Actions Bot"
           git config --global user.email "actions@github.com"
           git add last_weather.txt
-          # Only commit if there are changes to the file
-          git diff --quiet && git diff --staged --quiet || (git commit -m "Update weather state" && git push)
+          git commit -m "Update weather memory"
+          git push
