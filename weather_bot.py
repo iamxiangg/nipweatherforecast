@@ -1,6 +1,7 @@
 import requests
 import os
 import sys
+from datetime import datetime
 
 # --- CONFIG ---
 TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -8,81 +9,91 @@ CHAT_IDS = os.getenv("CHAT_IDS", "").split(",")
 DB_FILE = "last_weather.txt"
 
 TOWNS = {
-    "Sembawang": {"station": "S104"},
-    "Yishun": {"station": "S122"},
-    "Novena": {"station": "S111"}
+    "Sembawang": {"station": "S104", "region": "north", "area": "Sembawang"},
+    "Yishun": {"station": "S122", "region": "north", "area": "Yishun"},
+    "Novena": {"station": "S111", "region": "central", "area": "Novena"},
+    "Marina Bay": {"station": "S108", "region": "south", "area": "Downtown"}
 }
 
-def send_telegram(text):
-    for cid in CHAT_IDS:
-        cid = cid.strip()
-        if not cid: continue
-        url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-        requests.post(url, json={"chat_id": cid, "text": text, "parse_mode": "Markdown"})
+def get_status_label(val):
+    hourly_rate = val * 12 
+    if val == 0: return "☁️ Dry", hourly_rate
+    if hourly_rate < 2.5: return "💧 Light Rain", hourly_rate
+    if 2.5 <= hourly_rate < 10: return "🌧️ Moderate Rain", hourly_rate
+    if 10 <= hourly_rate < 50: return "⛈️ Heavy Rain", hourly_rate
+    return "🌊 Very Heavy Rain", hourly_rate
 
 def get_data():
     try:
-        # 1. Fetch Forecast
+        # 1. 2-Hour Nowcast
         rf = requests.get("https://api-open.data.gov.sg/v2/real-time/api/two-hr-forecast", timeout=15)
-        if rf.status_code != 200: raise Exception(f"Forecast API Status {rf.status_code}")
-        
-        items_f = rf.json().get('data', {}).get('items', [])
-        if not items_f: return None, None, None # No data case
-            
-        item_f = items_f[0]
-        update_time = item_f.get('update_timestamp', 'T00:00').split('T')[1][:5]
-        forecast_list = {f['area']: f['forecast'] for f in item_f.get('forecasts', [])}
+        f_item = rf.json().get('data', {}).get('items', [])[0]
+        nowcast = {f['area']: f['forecast'] for f in f_item.get('forecasts', [])}
+        timing = f_item.get('update_timestamp', 'T00:00').split('T')[1][:5]
 
-        # 2. Fetch Rainfall
+        # 2. Rainfall (5-min readings)
         rr = requests.get("https://api-open.data.gov.sg/v2/real-time/api/rainfall", timeout=15)
-        if rr.status_code != 200: raise Exception(f"Rainfall API Status {rr.status_code}")
-        
-        items_r = rr.json().get('data', {}).get('items', [])
-        rainfall_list = {r['station_id']: r['value'] for r in items_r[0].get('readings', [])} if items_r else {}
+        r_data = rr.json().get('data', {}).get('readings', [])[0].get('data', [])
+        rain_map = {r['stationId']: r['value'] for r in r_data}
 
-        return forecast_list, rainfall_list, update_time
-    except Exception as e:
-        # Send system alert only once per failure period
-        send_telegram(f"⚠️ *System Alert:* Weather API is currently unreachable.\nError: `{str(e)}`")
-        return "ERROR", None, None
+        # 3. 24-Hour Forecast (North, Central, South)
+        r24 = requests.get("https://api-open.data.gov.sg/v2/real-time/api/twenty-four-hr-forecast", timeout=15)
+        periods_24 = r24.json().get('data', {}).get('records', [{}])[0].get('periods', [])
+        
+        today_str = datetime.now().strftime('%Y-%m-%d')
+        formatted_24h = {"north": [], "central": [], "south": []}
+
+        for p in periods_24:
+            p_date = p.get('timePeriod', {}).get('start', '').split('T')[0]
+            day_label = "today" if p_date == today_str else "tomorrow"
+            p_text = p.get('timePeriod', {}).get('text', 'Period')
+            
+            for reg in formatted_24h.keys():
+                forecast_text = p.get('regions', {}).get(reg, {}).get('text', 'N/A')
+                formatted_24h[reg].append(f"{p_text} ({day_label}): {forecast_text}")
+
+        return nowcast, rain_map, timing, formatted_24h
+    except:
+        return "ERROR", None, None, None
 
 def main():
-    forecasts, rain_sensors, timing = get_data()
-    
-    if forecasts == "ERROR":
-        print("CHANGE_DETECTED=false") # Don't update memory on error
-        return
-    
-    if not forecasts:
-        print("No new data available. Skipping.")
-        print("CHANGE_DETECTED=false")
-        return
+    nowcast, rain, timing, forecast24 = get_data()
+    if nowcast == "ERROR" or not nowcast: return
 
-    # Create memory string: if a town is missing from API, we use 'N/A'
-    # This prevents the bot from thinking a missing town = a change.
-    current_expect_id = "|".join([f"{t}:{forecasts.get(t, 'N/A')}" for t in TOWNS])
+    current_state_list = []
+    message_blocks = []
 
-    last_expect_id = ""
+    for town, cfg in TOWNS.items():
+        expect = nowcast.get(cfg['area'], "No Data")
+        raw_val = rain.get(cfg['station'], 0.0)
+        status_label, hourly_rate = get_status_label(raw_val)
+        region = cfg['region']
+        
+        current_state_list.append(f"{town}:{status_label}:{expect}")
+        
+        block = f"🏠 *{town.upper()}* ({region.capitalize()})\n"
+        block += f"└ *Current:* {status_label} ({hourly_rate:.1f} mm/h)\n"
+        block += f"└ *Expect:* {expect}\n"
+        block += f"└ *24h Forecast:*\n"
+        for line in forecast24.get(region, []):
+            block += f"   • {line}\n"
+        message_blocks.append(block)
+
+    state_string = "|".join(current_state_list)
+    last_state = ""
     if os.path.exists(DB_FILE):
-        with open(DB_FILE, "r") as f:
-            last_expect_id = f.read().strip()
+        with open(DB_FILE, "r") as f: last_state = f.read().strip()
 
-    if current_expect_id != last_expect_id:
-        msg = f"📊 *Weather Forecast Change* ({timing})\n"
-        msg += "------------------------------------\n\n"
+    if state_string != last_state:
+        msg = f"📊 *Weather Dashboard Update* ({timing})\n"
+        msg += "------------------------------------\n\n" + "\n".join(message_blocks)
         
-        for town, ids in TOWNS.items():
-            expect = forecasts.get(town)
-            if not expect: continue # Skip towns missing from this specific API pull
-            
-            val = rain_sensors.get(ids['station'], 0.0)
-            status = "☔ Raining" if val > 0 else "☁️ Dry"
-            msg += f"🏠 *{town.upper()}*\n└ *Current:* {status} ({val}mm)\n└ *Expect:* {expect}\n\n"
-
-        send_telegram(msg)
+        for cid in CHAT_IDS:
+            if not cid.strip(): continue
+            requests.post(f"https://api.telegram.org/bot{TOKEN}/sendMessage", 
+                          json={"chat_id": cid.strip(), "text": msg, "parse_mode": "Markdown"})
         
-        with open(DB_FILE, "w") as f:
-            f.write(current_expect_id)
+        with open(DB_FILE, "w") as f: f.write(state_string)
         print("CHANGE_DETECTED=true")
     else:
         print("CHANGE_DETECTED=false")
