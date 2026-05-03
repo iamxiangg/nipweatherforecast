@@ -1,17 +1,20 @@
-name: Hourly Weather Push
+name: 15-Min Weather Watcher
 
 on:
   schedule:
-    # Runs every 15 minutes
     - cron: '*/15 * * * *'
-  workflow_dispatch: # Allows you to run it manually for testing
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    # Required to allow GitHub to push the file change back to your repo
+    permissions:
+      contents: write
+      
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -19,10 +22,18 @@ jobs:
           python-version: '3.9'
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: pip install requests
 
-      - name: Run bot script
+      - name: Run bot
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
-          CHAT_ID: ${{ secrets.CHAT_ID }}
+          CHAT_IDS: ${{ secrets.CHAT_IDS }}
         run: python weather_bot.py
+
+      - name: Commit and push if weather changed
+        run: |
+          git config --global user.name "Weather-Bot-Action"
+          git config --global user.email "actions@github.com"
+          git add last_weather.txt
+          # Only commit if there are changes to the file
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Update weather state" && git push)
