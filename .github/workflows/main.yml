@@ -2,17 +2,15 @@ name: Weather Bot Monitor
 
 on:
   schedule:
-    # Runs every 30 minutes for change-detection (e.g., 00:00, 00:30, 01:00...)
     - cron: '*/30 * * * *'
-    # Runs at 23:30 UTC, which is 07:30 Singapore Time (SGT)
     - cron: '30 23 * * *'
-  workflow_dispatch: # Allows you to manually trigger via the GitHub 'Actions' tab
+  workflow_dispatch: # Scenario 2: Enable manual button
 
 jobs:
   check-weather:
     runs-on: ubuntu-latest
     permissions:
-      contents: write # Needed to save the weather state back to the repository
+      contents: write
 
     steps:
       - name: Checkout Repository
@@ -32,21 +30,19 @@ jobs:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           CHAT_IDS: ${{ secrets.CHAT_IDS }}
         run: |
-          # Detect if the current time is the 07:30 SGT (23:30 UTC) slot
           CURRENT_TIME=$(date +%H%M)
           
-          if [ "$CURRENT_TIME" == "2330" ]; then
-            echo "Condition met: Sending forced morning update..."
+          # Logic: Use --force if it's 07:30 SGT (Scenario 3) OR Manual Dispatch (Scenario 2)
+          if [ "$CURRENT_TIME" == "2330" ] || [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "Forcing update (Scenario 2 or 3)..."
             OUTPUT=$(python weather_bot.py --force)
           else
-            echo "Checking for weather changes..."
+            echo "Checking for changes (Scenario 1)..."
             OUTPUT=$(python weather_bot.py)
           fi
           
-          # Print output to logs for debugging
           echo "$OUTPUT"
           
-          # Pass the change status to the next step
           if [[ "$OUTPUT" == *"CHANGE_DETECTED=true"* ]]; then
             echo "changed=true" >> $GITHUB_OUTPUT
           else
@@ -54,7 +50,6 @@ jobs:
           fi
 
       - name: Save Weather State
-        # Only run this if the script actually sent a message (changed=true)
         if: steps.weather_script.outputs.changed == 'true'
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
