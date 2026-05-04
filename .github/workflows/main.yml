@@ -1,48 +1,64 @@
-name: 30-Min Weather Watcher
+name: Weather Bot Monitor
 
 on:
   schedule:
+    # Runs every 30 minutes for change-detection (e.g., 00:00, 00:30, 01:00...)
     - cron: '*/30 * * * *'
-  workflow_dispatch:
+    # Runs at 23:30 UTC, which is 07:30 Singapore Time (SGT)
+    - cron: '30 23 * * *'
+  workflow_dispatch: # Allows you to manually trigger via the GitHub 'Actions' tab
 
 jobs:
-  build:
+  check-weather:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
-      
+      contents: write # Needed to save the weather state back to the repository
+
     steps:
-      - name: Checkout code
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.9'
 
       - name: Install Dependencies
         run: pip install requests
 
-      - name: Run Weather Check
-        id: check_weather
+      - name: Run Weather Bot
+        id: weather_script
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           CHAT_IDS: ${{ secrets.CHAT_IDS }}
         run: |
-          # Capture the output of the script to see if a change was detected
-          OUTPUT=$(python weather_bot.py)
+          # Detect if the current time is the 07:30 SGT (23:30 UTC) slot
+          CURRENT_TIME=$(date +%H%M)
+          
+          if [ "$CURRENT_TIME" == "2330" ]; then
+            echo "Condition met: Sending forced morning update..."
+            OUTPUT=$(python weather_bot.py --force)
+          else
+            echo "Checking for weather changes..."
+            OUTPUT=$(python weather_bot.py)
+          fi
+          
+          # Print output to logs for debugging
           echo "$OUTPUT"
+          
+          # Pass the change status to the next step
           if [[ "$OUTPUT" == *"CHANGE_DETECTED=true"* ]]; then
             echo "changed=true" >> $GITHUB_OUTPUT
           else
             echo "changed=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: Commit Memory State
-        if: steps.check_weather.outputs.changed == 'true'
+      - name: Save Weather State
+        # Only run this if the script actually sent a message (changed=true)
+        if: steps.weather_script.outputs.changed == 'true'
         run: |
-          git config --global user.name "GitHub Actions Bot"
-          git config --global user.email "actions@github.com"
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
           git add last_weather.txt
-          git commit -m "Update weather memory"
+          git commit -m "Update weather state: $(date +'%Y-%m-%d %H:%M SGT')"
           git push
