@@ -25,18 +25,15 @@ def get_status_label(val):
 
 def get_data():
     try:
-        # 1. 2-Hour Nowcast
         rf = requests.get("https://api-open.data.gov.sg/v2/real-time/api/two-hr-forecast", timeout=15)
         f_item = rf.json().get('data', {}).get('items', [])[0]
         nowcast = {f['area']: f['forecast'] for f in f_item.get('forecasts', [])}
         timing = f_item.get('update_timestamp', 'T00:00').split('T')[1][:5]
 
-        # 2. Rainfall
         rr = requests.get("https://api-open.data.gov.sg/v2/real-time/api/rainfall", timeout=15)
         r_data = rr.json().get('data', {}).get('readings', [])[0].get('data', [])
         rain_map = {r['stationId']: r['value'] for r in r_data}
 
-        # 3. 24-Hour Forecast
         r24 = requests.get("https://api-open.data.gov.sg/v2/real-time/api/twenty-four-hr-forecast", timeout=15)
         periods_24 = r24.json().get('data', {}).get('records', [{}])[0].get('periods', [])
         
@@ -47,21 +44,20 @@ def get_data():
             p_date = p.get('timePeriod', {}).get('start', '').split('T')[0]
             day = "today" if p_date == today_str else "tomorrow"
             raw_text = p.get('timePeriod', {}).get('text', '')
-            
             if "6 am to Midday" in raw_text: p_name = "Morning"
             elif "Midday to 6 pm" in raw_text: p_name = "Afternoon"
             else: p_name = "Night"
-            
             for reg in formatted_24h.keys():
                 txt = p.get('regions', {}).get(reg, {}).get('text', 'N/A')
                 formatted_24h[reg].append(f"{p_name} ({day}): {txt}")
-
         return nowcast, rain_map, timing, formatted_24h
     except:
         return "ERROR", None, None, None
 
 def main():
+    # Detect Scenario 2 & 3: Force if --force flag is present
     force_push = "--force" in sys.argv
+    
     nowcast, rain, timing, forecast24 = get_data()
     if nowcast == "ERROR" or not nowcast: 
         print("CHANGE_DETECTED=false")
@@ -86,6 +82,7 @@ def main():
     state_string = "|".join(current_state_list)
     last_state = open(DB_FILE, "r").read().strip() if os.path.exists(DB_FILE) else ""
 
+    # Logic: Scenario 1 (Change), Scenario 2 (Manual), Scenario 3 (0730)
     if state_string != last_state or force_push:
         header = "🌅 *Morning Weather Brief*" if force_push else "📊 *Weather Dashboard Update*"
         msg = f"{header} ({timing})\n------------------------------------\n\n" + "\n".join(message_blocks)
