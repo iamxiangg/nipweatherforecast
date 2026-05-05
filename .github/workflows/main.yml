@@ -2,7 +2,7 @@ name: Weather Bot Monitor
 
 on:
   schedule:
-    - cron: '*/30 * * * *'
+    - cron: '*/20 * * * *'
     - cron: '30 23 * * *'
   workflow_dispatch: # Scenario 2: Enable manual button
 
