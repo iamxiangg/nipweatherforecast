@@ -13,7 +13,7 @@ TOWNS = {
     "Sembawang": {"stations": ["S104", "S210", "S227"], "region": "north", "area": "Sembawang"},
     "Yishun": {"stations": ["S209", "S104", "S109"], "region": "north", "area": "Yishun"},
     "Novena": {"stations": ["S111", "S88", "S123"], "region": "central", "area": "Novena"},
-    "Marina Bay": {"stations": ["S108", "S119", "S121"], "region": "south", "area": "Downtown"}
+    "Marina Bay": {"stations": ["S108", "S119", "S121"], "region": "south", "area": "City"}
 }
 
 def get_status_label(val):
