@@ -1,7 +1,7 @@
 import requests
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 # --- CONFIG ---
 TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -16,6 +16,19 @@ TOWNS = {
     "Marina Bay": {"stations": ["S108", "S119", "S121"], "region": "south", "area": "City"}
 }
 
+def get_severity_logic(status_label, expect):
+    """Returns a color emoji based on how 'bad' the weather is."""
+    bad_terms = ["heavy", "thundery", "very heavy", "sumatra"]
+    warn_terms = ["moderate", "rain", "showers"]
+    
+    combined = (status_label + " " + expect).lower()
+    
+    if any(word in combined for word in bad_terms):
+        return "🔴"
+    if any(word in combined for word in warn_terms):
+        return "🟡"
+    return "🟢"
+
 def get_status_label(val):
     rate = val * 12 
     if val == 0: return "☁️ Dry", rate
@@ -26,13 +39,18 @@ def get_status_label(val):
 
 def get_data():
     try:
+        # TZ Fix: Use Singapore Time
+        sgt = timezone(timedelta(hours=8))
+        now_sg = datetime.now(sgt)
+        today_str = now_sg.strftime('%Y-%m-%d')
+
         # 1. Nowcast API (Next 2h)
         rf = requests.get("https://api-open.data.gov.sg/v2/real-time/api/two-hr-forecast", timeout=15)
         f_item = rf.json().get('data', {}).get('items', [])[0]
         nowcast = {f['area']: f['forecast'] for f in f_item.get('forecasts', [])}
         timing = f_item.get('update_timestamp', 'T00:00').split('T')[1][:5]
 
-        # 2. Rainfall API (Robust "Last Item" logic)
+        # 2. Rainfall API
         rr = requests.get("https://api-open.data.gov.sg/v2/real-time/api/rainfall", timeout=15)
         all_readings = rr.json().get('data', {}).get('readings', [])
         if not all_readings: return "ERROR", None, None, None
@@ -41,25 +59,25 @@ def get_data():
         r_data = latest_reading.get('data', [])
         rain_map = {r['stationId']: r['value'] for r in r_data}
         
-        # 3. 24-Hour Forecast (Rolling 3 periods)
+        # 3. 24-Hour Forecast
         r24 = requests.get("https://api-open.data.gov.sg/v2/real-time/api/twenty-four-hr-forecast", timeout=15)
         periods_24 = r24.json().get('data', {}).get('records', [{}])[0].get('periods', [])
-        today_str = datetime.now().strftime('%Y-%m-%d')
         formatted_24h = {"north": [], "central": [], "south": []}
 
         for p in periods_24:
-            p_start_iso = p.get('timePeriod', {}).get('start', '')
-            p_date = p_start_iso.split('T')[0]
+            p_date = p.get('timePeriod', {}).get('start', '').split('T')[0]
             raw_text = p.get('timePeriod', {}).get('text', '').lower()
-            day_label = "Today" if p_date == today_str else "Tomorrow"
+            day_abbr = "Tdy" if p_date == today_str else "Tmr"
             
-            if "6 am" in raw_text and "midday" in raw_text: time_label = "Morning"
-            elif "midday" in raw_text and "6 pm" in raw_text: time_label = "Afternoon"
-            else: time_label = "Night"
+            if "6 am" in raw_text: slot = "Mor"
+            elif "midday" in raw_text: slot = "Aft"
+            else: slot = "Nit"
             
             for reg in formatted_24h.keys():
                 txt = p.get('regions', {}).get(reg, {}).get('text', 'N/A')
-                formatted_24h[reg].append(f"{time_label} ({day_label}): {txt}")
+                # Use simple emoji for forecast to save space
+                f_emoji = "⛈️" if "thundery" in txt.lower() else "🌧️" if "rain" in txt.lower() or "showers" in txt.lower() else "☁️"
+                formatted_24h[reg].append(f"{f_emoji} ({slot} {day_abbr})")
 
         return nowcast, rain_map, timing, formatted_24h
     except Exception as e:
@@ -93,23 +111,25 @@ def main():
         current_state_list.append(f"{town}:{status_label}:{expect}")
         
         prev = last_map.get(town, {"cat": "", "exp": ""})
-        # Highlight changes with Bold-Italics
+        # Detection
         d_status = f"***{status_label}***" if status_label != prev.get('cat') and last_state else status_label
         d_expect = f"***{expect}***" if expect != prev.get('exp') and last_state else expect
+        
+        # Severity Icon
+        sev = get_severity_logic(status_label, expect)
 
-        block = f"🏠 *{town.upper()}* ({cfg['region'].capitalize()})\n"
-        block += f"└ *Current:* {d_status} ({rate:.1f} mm/h)\n"
-        block += f"└ *Next 2h:* {d_expect}\n"
-        block += f"└ *24h Forecast:*\n"
-        for line in forecast24.get(cfg['region'], []):
-            block += f"   • {line}\n"
+        # Condensed Layout
+        block = f"{sev} **{town.upper()}** | {d_status}\n"
+        block += f"└ **Now:** {rate:.1f} mm/h\n"
+        block += f"└ **Next 2h:** {d_expect}\n"
+        block += f"└ **Later:** {' | '.join(forecast24.get(cfg['region'], []))}\n"
         message_blocks.append(block)
 
     state_string = "|".join(current_state_list)
 
     if state_string != last_state or force_push:
         header = "🌅 *Morning Weather Brief*" if force_push else "📊 *Weather Dashboard Update*"
-        msg = f"{header} ({timing})\n------------------------------------\n\n" + "\n".join(message_blocks)
+        msg = f"{header} ({timing})\n------------------------------------\n\n" + "\n\n".join(message_blocks)
         
         for cid in CHAT_IDS:
             if cid.strip():
