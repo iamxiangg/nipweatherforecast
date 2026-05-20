@@ -1,1 +1,1 @@
-Sembawang:☁️ Dry:Cloudy|Yishun:☁️ Dry:Cloudy|Novena:☁️ Dry:Cloudy|Marina Bay:☁️ Dry:Cloudy
+Sembawang:⛈️ Heavy Rain:Thundery Showers|Yishun:☁️ Dry:Thundery Showers|Novena:☁️ Dry:Thundery Showers|Marina Bay:☁️ Dry:Thundery Showers
