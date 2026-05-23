@@ -1,9 +1,8 @@
 name: Weather Bot Monitor
 
 on:
-  schedule:
-    - cron: '*/20 * * * *'
-    - cron: '30 23 * * *'
+  repository_dispatch:
+    types: [check_weather_interval, force_weather_update]
   workflow_dispatch: # Scenario 2: Enable manual button
 
 jobs:
@@ -30,10 +29,8 @@ jobs:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           CHAT_IDS: ${{ secrets.CHAT_IDS }}
         run: |
-          CURRENT_TIME=$(date +%H%M)
-          
-          # Logic: Use --force if it's 07:30 SGT (Scenario 3) OR Manual Dispatch (Scenario 2)
-          if [ "$CURRENT_TIME" == "2330" ] || [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+          # Check if external cron sent 'force_weather_update' OR user clicked 'workflow_dispatch'
+          if [ "${{ github.event.action }}" == "force_weather_update" ] || [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
             echo "Forcing update (Scenario 2 or 3)..."
             OUTPUT=$(python weather_bot.py --force)
           else
