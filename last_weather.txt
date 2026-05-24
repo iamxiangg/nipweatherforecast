@@ -1,1 +1,1 @@
-Sembawang:☁️ Dry:Thundery Showers|Yishun:🌧️ Moderate Rain:Thundery Showers|Novena:☁️ Dry:Thundery Showers|Marina Bay:⛈️ Heavy Rain:Thundery Showers
+Sembawang:☁️ Dry:Heavy Thundery Showers with Gusty Winds|Yishun:🌧️ Moderate Rain:Heavy Thundery Showers with Gusty Winds|Novena:☁️ Dry:Heavy Thundery Showers with Gusty Winds|Marina Bay:⛈️ Heavy Rain:Heavy Thundery Showers with Gusty Winds
