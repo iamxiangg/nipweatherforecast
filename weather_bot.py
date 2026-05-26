@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_IDS = os.getenv("CHAT_IDS", "").split(",")
 DB_FILE = "last_weather.txt"
-COOLDOWN_MINUTES = 15
+COOLDOWN_MINUTES = 10
 
 TOWNS = {
     "Sembawang": {"stations": ["S104", "S210", "S227"], "region": "north", "area": "Sembawang"},
@@ -19,11 +19,11 @@ TOWNS = {
 def get_status_label(val, expect):
     rate = val * 12 
     is_forecast_rain = any(term in expect.lower() for term in ["rain", "showers", "thundery", "sumatra"])
-    
+
     if val == 0:
         if is_forecast_rain: return "☁️ Pending/Incoming", rate
         return "☁️ Dry", rate
-        
+
     if rate < 2.5: return "💧 Light Rain", rate
     if 2.5 <= rate < 10: return "🌧️ Moderate Rain", rate
     if 10 <= rate < 50: return "⛈️ Heavy Rain", rate
@@ -78,7 +78,27 @@ def main():
 
     current_state_list = []
     message_blocks = []
-    
+
+    # Include API updated timing right inside the state verification string
+    current_state_list.append(f"TS:{timing}")
+
+    for town, cfg in TOWNS.items():
+        expect = nowcast.get(cfg['area'], "No Data")
+        vals = [rain.get(sid, 0.0) for sid in cfg['stations'] if rain.get(sid) is not None]
+        max_raw_val = max(vals) if vals else 0.0
+
+        status_label, rate = get_status_label(max_raw_val, expect)
+        later_str = "-".join(forecast24.get(cfg['region'], []))
+        
+        # Added later_str here so changes in 24h forecast trigger a push
+        current_state_list.append(f"{town}:{status_label}:{expect}:{later_str}")
+
+        sev = get_severity_logic(status_label, expect)
+        block = f"{sev} **{town.upper()}** | {status_label}\n└ **Now:** {rate:.1f} mm/h\n└ **Next 2h:** {expect}\n└ **Later:** {' | '.join(forecast24.get(cfg['region'], []))}"
+        message_blocks.append(block)
+
+    state_string = "|".join(current_state_list)
+
     # Load persistence
     last_sent_time = None
     last_state = ""
@@ -86,37 +106,33 @@ def main():
         with open(DB_FILE, "r") as f:
             content = f.read().split(":", 1)
             if len(content) == 2:
-                last_sent_time = datetime.fromisoformat(content[0])
-                last_state = content[1]
+                try:
+                    last_sent_time = datetime.fromisoformat(content[0])
+                    last_state = content[1].strip()
+                except ValueError:
+                    pass
 
-    for town, cfg in TOWNS.items():
-        expect = nowcast.get(cfg['area'], "No Data")
-        vals = [rain.get(sid, 0.0) for sid in cfg['stations'] if rain.get(sid) is not None]
-        max_raw_val = max(vals) if vals else 0.0
-        
-        status_label, rate = get_status_label(max_raw_val, expect)
-        current_state_list.append(f"{town}:{status_label}:{expect}")
-        
-        sev = get_severity_logic(status_label, expect)
-        block = f"{sev} **{town.upper()}** | {status_label}\n└ **Now:** {rate:.1f} mm/h\n└ **Next 2h:** {expect}\n└ **Later:** {' | '.join(forecast24.get(cfg['region'], []))}"
-        message_blocks.append(block)
+    # Check if anything structural changed
+    has_changed = state_string != last_state
+    should_send = force_push or has_changed
 
-    state_string = "|".join(current_state_list)
-    should_send = force_push or (state_string != last_state)
-    
-    # Cooldown Logic
+    # Cooldown Logic (Only enforces minimum spacing if an actual change occurred)
     if should_send and last_sent_time and not force_push:
         elapsed = (datetime.now() - last_sent_time).total_seconds() / 60
         if elapsed < COOLDOWN_MINUTES:
             should_send = False
 
     if should_send:
+        # Note: Added 'Markdown' parse_mode fix. Double asterisks require standard Markdown, not MarkdownV2
         msg = f"📊 *Weather Dashboard Update* ({timing})\n------------------------------------\n\n" + "\n\n".join(message_blocks)
         for cid in CHAT_IDS:
             if cid.strip():
                 requests.post(f"https://api.telegram.org/bot{TOKEN}/sendMessage", 
                               json={"chat_id": cid.strip(), "text": msg, "parse_mode": "Markdown"})
-        with open(DB_FILE, "w") as f: f.write(f"{datetime.now().isoformat()}:{state_string}")
+        
+        # Save exact current timestamp and state string
+        with open(DB_FILE, "w") as f: 
+            f.write(f"{datetime.now().isoformat()}:{state_string}")
 
 if __name__ == "__main__":
     main()
