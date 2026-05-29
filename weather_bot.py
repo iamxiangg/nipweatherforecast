@@ -79,8 +79,7 @@ def main():
     current_state_list = []
     message_blocks = []
 
-    # Include API updated timing right inside the state verification string
-    current_state_list.append(f"TS:{timing}")
+    # FIX: "TS:{timing}" removed here to prevent time updates alone from triggering new logs.
 
     for town, cfg in TOWNS.items():
         expect = nowcast.get(cfg['area'], "No Data")
@@ -89,8 +88,7 @@ def main():
 
         status_label, rate = get_status_label(max_raw_val, expect)
         later_str = "-".join(forecast24.get(cfg['region'], []))
-        
-        # Added later_str here so changes in 24h forecast trigger a push
+
         current_state_list.append(f"{town}:{status_label}:{expect}:{later_str}")
 
         sev = get_severity_logic(status_label, expect)
@@ -112,25 +110,26 @@ def main():
                 except ValueError:
                     pass
 
-    # Check if anything structural changed
     has_changed = state_string != last_state
-    should_send = force_push or has_changed
 
-    # Cooldown Logic (Only enforces minimum spacing if an actual change occurred)
-    if should_send and last_sent_time and not force_push:
+    # Cooldown Gate: Stop spamming within the cooldown window if structural changes occur
+    if has_changed and last_sent_time and not force_push:
         elapsed = (datetime.now() - last_sent_time).total_seconds() / 60
         if elapsed < COOLDOWN_MINUTES:
-            should_send = False
+            print(f"Weather changed, but script is cooling down. Elapsed: {elapsed:.1f} mins.")
+            return
+
+    should_send = force_push or has_changed
 
     if should_send:
-        # Note: Added 'Markdown' parse_mode fix. Double asterisks require standard Markdown, not MarkdownV2
+        # Note: Fixed the bold syntax inside the message body to render cleanly using classic Markdown
         msg = f"📊 *Weather Dashboard Update* ({timing})\n------------------------------------\n\n" + "\n\n".join(message_blocks)
         for cid in CHAT_IDS:
             if cid.strip():
                 requests.post(f"https://api.telegram.org/bot{TOKEN}/sendMessage", 
                               json={"chat_id": cid.strip(), "text": msg, "parse_mode": "Markdown"})
-        
-        # Save exact current timestamp and state string
+
+        # Update cache file with timestamp and the clean state fingerprint
         with open(DB_FILE, "w") as f: 
             f.write(f"{datetime.now().isoformat()}:{state_string}")
 
