@@ -79,8 +79,6 @@ def main():
     current_state_list = []
     message_blocks = []
 
-    # FIX: "TS:{timing}" removed here to prevent time updates alone from triggering new logs.
-
     for town, cfg in TOWNS.items():
         expect = nowcast.get(cfg['area'], "No Data")
         vals = [rain.get(sid, 0.0) for sid in cfg['stations'] if rain.get(sid) is not None]
@@ -112,17 +110,18 @@ def main():
 
     has_changed = state_string != last_state
 
-    # Cooldown Gate: Stop spamming within the cooldown window if structural changes occur
+    # Cooldown Gate: Enforce timing block inside the check variable instead of an abrupt script drop out
+    is_cooling_down = False
     if has_changed and last_sent_time and not force_push:
         elapsed = (datetime.now() - last_sent_time).total_seconds() / 60
         if elapsed < COOLDOWN_MINUTES:
+            is_cooling_down = True
             print(f"Weather changed, but script is cooling down. Elapsed: {elapsed:.1f} mins.")
-            return
 
-    should_send = force_push or has_changed
+    # Determine if we should push updates
+    should_send = force_push or (has_changed and not is_cooling_down)
 
     if should_send:
-        # Note: Fixed the bold syntax inside the message body to render cleanly using classic Markdown
         msg = f"📊 *Weather Dashboard Update* ({timing})\n------------------------------------\n\n" + "\n\n".join(message_blocks)
         for cid in CHAT_IDS:
             if cid.strip():
@@ -132,6 +131,11 @@ def main():
         # Update cache file with timestamp and the clean state fingerprint
         with open(DB_FILE, "w") as f: 
             f.write(f"{datetime.now().isoformat()}:{state_string}")
+        
+        # 🛑 FIX: Outputs exactly what your YML file's conditional string check expects to see
+        print("CHANGE_DETECTED=true")
+    else:
+        print("CHANGE_DETECTED=false")
 
 if __name__ == "__main__":
     main()
