@@ -9,7 +9,7 @@ jobs:
   check-weather:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read # Bounded security access (write access no longer required since we aren't pushing commits)
 
     steps:
       - name: Checkout Repository
@@ -23,6 +23,16 @@ jobs:
       - name: Install Dependencies
         run: pip install requests
 
+      # 🔐 CONFIG CHANGE: Restore last_weather.txt from previous runtime memory space
+      - name: Restore Weather Cache
+        uses: actions/cache/restore@v4
+        with:
+          path: last_weather.txt
+          key: weather-state-${{ github.run_id }} # Unique runtime identifier fallback
+          restore-keys: |
+            weather-state-
+
+      # Kept exactly matching your runtime condition block
       - name: Run Weather Bot
         id: weather_script
         env:
@@ -46,11 +56,10 @@ jobs:
             echo "changed=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: Save Weather State
+      # 🔐 CONFIG CHANGE: Save state to cache layer instead of executing a heavy git push
+      - name: Save Weather State Cache
         if: steps.weather_script.outputs.changed == 'true'
-        run: |
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          git config --local user.name "github-actions[bot]"
-          git add last_weather.txt
-          git commit -m "Update weather state: $(date +'%Y-%m-%d %H:%M SGT')"
-          git push
+        uses: actions/cache/save@v4
+        with:
+          path: last_weather.txt
+          key: weather-state-${{ github.run_id }}-${{ github.run_number }}
