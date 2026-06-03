@@ -1,21 +1,18 @@
 name: Weather Bot Monitor
 
 on:
-  repository_dispatch:
-    types: [check_weather_interval, force_weather_update]
-  workflow_dispatch:
+  schedule:
+    # ⏱️ Triggers natively every 10 minutes inside the main branch context
+    - cron: '*/10 * * * *'
+  workflow_dispatch: # Scenario 3: Keeps manual override option available
 
 jobs:
   check-weather:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write # 🔐 Grants permission to save the updated text file back to your repo
 
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 1 # Pulls down your code along with your existing last_weather.txt file
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -25,17 +22,26 @@ jobs:
       - name: Install Dependencies
         run: pip install requests
 
+      # 💾 RESTORE CACHE: Works flawlessly now because it runs natively on 'main'
+      - name: Restore Weather Cache
+        id: cache_restore
+        uses: actions/cache/restore@v4
+        with:
+          path: last_weather.txt
+          key: weather-cache-key
+
       - name: Run Weather Bot
         id: weather_script
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           CHAT_IDS: ${{ secrets.CHAT_IDS }}
         run: |
-          if [ "${{ github.event.action }}" == "force_weather_update" ] || [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-            echo "Forcing update..."
+          # Detect manual button vs automated schedule checks
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "Forcing updates (Manual Override)..."
             OUTPUT=$(python weather_bot.py --force)
           else
-            echo "Checking for changes..."
+            echo "Running normal interval change check..."
             OUTPUT=$(python weather_bot.py)
           fi
           
@@ -47,12 +53,10 @@ jobs:
             echo "changed=false" >> $GITHUB_OUTPUT
           fi
 
-      # 🔐 FIX: Instead of cache, commit the modified last_weather.txt back into your repository
-      - name: Commit and Push Weather State Changes
+      # 💾 SAVE CACHE: Only updates when something meaningful happens
+      - name: Save Weather State Cache
         if: steps.weather_script.outputs.changed == 'true'
-        run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add last_weather.txt
-          git commit -m "chore: update weather state tracking snapshot [skip ci]"
-          git push
+        uses: actions/cache/save@v4
+        with:
+          path: last_weather.txt
+          key: weather-cache-key
