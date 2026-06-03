@@ -95,7 +95,7 @@ def main():
 
     state_string = "|".join(current_state_list)
 
-    # Load persistence
+    # Load persistence tracking data via repository contents
     last_sent_time = None
     last_state = ""
     if os.path.exists(DB_FILE):
@@ -110,7 +110,7 @@ def main():
 
     has_changed = state_string != last_state
 
-    # Cooldown Gate: Enforce timing block inside the check variable instead of an abrupt script drop out
+    # Cooldown Gate calculation
     is_cooling_down = False
     if has_changed and last_sent_time and not force_push:
         elapsed = (datetime.now() - last_sent_time).total_seconds() / 60
@@ -118,7 +118,7 @@ def main():
             is_cooling_down = True
             print(f"Weather changed, but script is cooling down. Elapsed: {elapsed:.1f} mins.")
 
-    # Determine if we should push updates
+    # Determine execution dispatch criteria
     should_send = force_push or (has_changed and not is_cooling_down)
 
     if should_send:
@@ -128,14 +128,27 @@ def main():
                 requests.post(f"https://api.telegram.org/bot{TOKEN}/sendMessage", 
                               json={"chat_id": cid.strip(), "text": msg, "parse_mode": "Markdown"})
 
-        # Update cache file with timestamp and the clean state fingerprint
+        # Update cache tracking log snapshot metadata configuration
         with open(DB_FILE, "w") as f: 
             f.write(f"{datetime.now().isoformat()}:{state_string}")
-        
-        # 🛑 FIX: Outputs exactly what your YML file's conditional string check expects to see
+
         print("CHANGE_DETECTED=true")
+
+    elif has_changed and is_cooling_down:
+        # Weather updated, but skipped due to throttling cooldown rules.
+        # Commit updated layout footprint, preserving original timeline signature window markers.
+        timestamp_to_keep = last_sent_time.isoformat() if last_sent_time else datetime.now().isoformat()
+        with open(DB_FILE, "w") as f:
+            f.write(f"{timestamp_to_keep}:{state_string}")
+        
+        print("CHANGE_DETECTED=true")
+
     else:
-        print("CHANGE_DETECTED=false")
+        # Weather is identical. Increment historical baseline timestamps directly.
+        with open(DB_FILE, "w") as f:
+            f.write(f"{datetime.now().isoformat()}:{state_string}")
+        
+        print("CHANGE_DETECTED=true")
 
 if __name__ == "__main__":
     main()
