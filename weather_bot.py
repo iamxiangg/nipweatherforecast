@@ -110,7 +110,7 @@ def main():
 
     has_changed = state_string != last_state
 
-    # Cooldown Gate calculation
+    # Cooldown Gate calculation based strictly on when Telegram was last alerted
     is_cooling_down = False
     if has_changed and last_sent_time and not force_push:
         elapsed = (datetime.now() - last_sent_time).total_seconds() / 60
@@ -128,7 +128,7 @@ def main():
                 requests.post(f"https://api.telegram.org/bot{TOKEN}/sendMessage", 
                               json={"chat_id": cid.strip(), "text": msg, "parse_mode": "Markdown"})
 
-        # Update cache tracking log snapshot metadata configuration
+        # Update file with current execution time (this becomes the new baseline alert marker)
         with open(DB_FILE, "w") as f: 
             f.write(f"{datetime.now().isoformat()}:{state_string}")
 
@@ -144,11 +144,8 @@ def main():
         print("CHANGE_DETECTED=true")
 
     else:
-        # Weather is identical. Increment historical baseline timestamps directly.
-        with open(DB_FILE, "w") as f:
-            f.write(f"{datetime.now().isoformat()}:{state_string}")
-        
-        print("CHANGE_DETECTED=true")
+        # Weather is identical. Output false so GitHub Actions terminates WITHOUT doing a git push!
+        print("CHANGE_DETECTED=false")
 
 if __name__ == "__main__":
     main()
