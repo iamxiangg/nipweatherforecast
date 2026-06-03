@@ -95,7 +95,7 @@ def main():
 
     state_string = "|".join(current_state_list)
 
-    # Load persistence tracking data via repository contents
+    # Load persistence tracking data via native cache file
     last_sent_time = None
     last_state = ""
     if os.path.exists(DB_FILE):
@@ -110,7 +110,7 @@ def main():
 
     has_changed = state_string != last_state
 
-    # Cooldown Gate calculation based strictly on when Telegram was last alerted
+    # Cooldown Gate checking
     is_cooling_down = False
     if has_changed and last_sent_time and not force_push:
         elapsed = (datetime.now() - last_sent_time).total_seconds() / 60
@@ -128,7 +128,7 @@ def main():
                 requests.post(f"https://api.telegram.org/bot{TOKEN}/sendMessage", 
                               json={"chat_id": cid.strip(), "text": msg, "parse_mode": "Markdown"})
 
-        # Update file with current execution time (this becomes the new baseline alert marker)
+        # Alert triggered! Create text baseline for cache registration
         with open(DB_FILE, "w") as f: 
             f.write(f"{datetime.now().isoformat()}:{state_string}")
 
@@ -136,7 +136,7 @@ def main():
 
     elif has_changed and is_cooling_down:
         # Weather updated, but skipped due to throttling cooldown rules.
-        # Commit updated layout footprint, preserving original timeline signature window markers.
+        # Track updated states, but preserve original timeline window marker.
         timestamp_to_keep = last_sent_time.isoformat() if last_sent_time else datetime.now().isoformat()
         with open(DB_FILE, "w") as f:
             f.write(f"{timestamp_to_keep}:{state_string}")
@@ -144,7 +144,7 @@ def main():
         print("CHANGE_DETECTED=true")
 
     else:
-        # Weather is identical. Output false so GitHub Actions terminates WITHOUT doing a git push!
+        # Weather is identical. Output false to skip updating cache completely.
         print("CHANGE_DETECTED=false")
 
 if __name__ == "__main__":
